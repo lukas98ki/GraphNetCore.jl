@@ -186,9 +186,9 @@ function accumulate_stats!(n::NormaliserOnline, F)
     n.num_accumulations += 1.0f0
 end
 
+
 function get_mean(n::NormaliserOnline)
     safe_count = max(n.acc_count, 1.0f0)
-
     return n.acc_sum / safe_count
 end
 

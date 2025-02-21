@@ -34,12 +34,59 @@ Converts the given edges to unique pairs of senders and receivers (in both direc
 - Tuple containing the bi-directional sender-receiver pairs. The first index is one direction, the second index the other one.
 """
 function parse_edges(edges)
-    receivers = minimum(edges; dims = 1)
+    receivers = minimum(edges; dims = 1)    # edges= 2xn
     senders = maximum(edges; dims = 1)
     packed_edges = vcat(senders, receivers)
     unique_edges = unique(packed_edges; dims = 2)
     senders = unique_edges[1, :]
     receivers = unique_edges[2, :]
+    return vcat(senders, receivers), vcat(receivers, senders)
+end
+
+
+
+"""
+parse_custom_edges_features(data)
+
+Converts the given edges to unique pairs of senders and receivers (in both directions).
+Also adjusts the edge_feature matrix to the newly formatted and sorted edges.
+
+## Arguments
+- `data`: data containing a trajectory
+
+
+## Returns
+- Tuple containing the bi-directional sender-receiver pairs. The first is one direction, the second the other one.
+"""
+function parse_custom_edges_features(data)
+    edge_feature_name =  first(filter(k -> startswith(k, "edge|"), keys(data))) # Todo: geht davon aus dass es nur eins gibt
+    edge_features = data[edge_feature_name]
+    edges = data["edges"]
+
+    receivers = minimum(edges; dims = 1)    # edges = 2xn
+    senders = maximum(edges; dims = 1)
+    packed_edges = vcat(senders, receivers)
+    unique_edges = unique(packed_edges; dims = 2)
+    senders = unique_edges[1, :]
+    receivers = unique_edges[2, :]
+
+    edge_map = Dict(
+        (edges[1,i], edges[2,i]) => i for i in 1:size(edges, 2)
+    )
+
+    new_edge_features = zeros(size(edge_features, 1), 2 * size(senders, 1))
+
+    for (i, (s,r)) in enumerate(zip(senders, receivers))
+        fwd_idx = edge_map[(s,r)]
+        new_edge_features[:,i] = edge_features[:, fwd_idx]
+        new_edge_features[:, size(senders, 1) + i] = edge_features[:, fwd_idx]
+    end
+
+    data[edge_feature_name] = new_edge_features
+    # println("Size checks:")
+    # println("Size senders: ", size(senders))
+    # println("Size new edge features: ", size(new_edge_features))
+    # println("Max min of values are: ", maximum(new_edge_features), minimum(new_edge_features))
 
     return vcat(senders, receivers), vcat(receivers, senders)
 end

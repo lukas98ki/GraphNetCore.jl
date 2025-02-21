@@ -66,13 +66,13 @@ function build_mlp(input_size::T, latent_size::T, output_size::T,
 end
 
 """
-    build_model(quantities_size, dims, output_size, mps, layer_size, hidden_layers)
+    build_model(nf_size, ef_size, output_size, mps, layer_size, hidden_layers)
 
 Constructs the Encode-Process-Decode model as a [Lux.jl](https://github.com/LuxDL/Lux.jl) Chain with the given arguments.
 
 ## Arguments
-- `quantities_size`: Sum of dimensions of each node feature.
-- `dims`: Dimension of the mesh.
+- `nf_size`: Sum of dimensions of each node feature.
+- `ef_size`: Size of edge_features
 - `output_size`: Sum of dimensions of output quantities.
 - `mps`: Number of message passing steps.
 - `layer_size`: Size of hidden layers.
@@ -81,10 +81,10 @@ Constructs the Encode-Process-Decode model as a [Lux.jl](https://github.com/LuxD
 ## Returns
 - Encode-Process-Decode model as a [Lux.jl](https://github.com/LuxDL/Lux.jl) Chain.
 """
-function build_model(quantities_size::Integer, dims, output_size::Integer,
+function build_model(nf_size::Integer, ef_size, output_size::Integer,
     mps::Integer, layer_size::Integer, hidden_layers::Integer)
-    encoder = Encoder(build_mlp(quantities_size, layer_size, layer_size, hidden_layers),
-        build_mlp(dims + 1, layer_size, layer_size, hidden_layers))
+    encoder = Encoder(build_mlp(nf_size, layer_size, layer_size, hidden_layers),
+        build_mlp(ef_size, layer_size, layer_size, hidden_layers))
 
     processors = Vector{Processor}()
     for _ in 1:mps
@@ -202,13 +202,13 @@ function save!(gn, opt_state, df_train::DataFrame, df_valid::DataFrame,
 end
 
 """
-    load(quantities, dims, norms, output, message_steps, ls, hl, opt, device, path)
+    load(quantities, ef_size, norms, output, message_steps, ls, hl, opt, device, path)
 
 Loads the [`GraphNetwork`](@ref) from the latest checkpoint at the given path.
 
 ## Arguments
-- `quantities`: Sum of dimensions of each node feature.
-- `dims`: Dimension of the mesh.
+- `nf_size`: Sum of dimensions of each node feature.
+- `ef_size`: Dimension of the mesh.
 - `e_norms`: Normalisers for edge features.
 - `n_norms`: Normalisers for node features.
 - `o_norms`: Normalisers for output features.
@@ -226,7 +226,7 @@ Loads the [`GraphNetwork`](@ref) from the latest checkpoint at the given path.
 - [DataFrames.jl](https://github.com/JuliaData/DataFrames.jl) DataFrame containing the train losses at the checkpoints.
 - [DataFrames.jl](https://github.com/JuliaData/DataFrames.jl) DataFrame containing the validation losses at the checkpoints (only improvements are saved).
 """
-function load(quantities, dims, e_norms::Union{NormaliserOffline,NormaliserOnline},
+function load(nf_size, ef_size, e_norms::Union{NormaliserOffline,NormaliserOnline},
     n_norms::Dict{String,Union{NormaliserOffline,NormaliserOnline}},
     o_norms::Dict{String,Union{NormaliserOffline,NormaliserOnline}},
     output, message_steps, ls, hl, opt, device::Function, path::String)
@@ -243,7 +243,7 @@ function load(quantities, dims, e_norms::Union{NormaliserOffline,NormaliserOnlin
         nn = deserialize(n_norm, device)
         on = deserialize(o_norm, device)
 
-        model = build_model(quantities, dims, output, message_steps, ls, hl)
+        model = build_model(nf_size, ef_size, output, message_steps, ls, hl)
         gn = GraphNetwork(model, ps, st, en, nn, on)
 
         if !isnothing(opt)
@@ -252,7 +252,7 @@ function load(quantities, dims, e_norms::Union{NormaliserOffline,NormaliserOnlin
             return gn, device(opt_state), df_train, df_valid
         end
     else
-        model = build_model(quantities, dims, output, message_steps, ls, hl)
+        model = build_model(nf_size, ef_size, output, message_steps, ls, hl)
         ps, st = Lux.setup(Random.default_rng(), model)
 
         ps = ComponentArray(ps) |> device

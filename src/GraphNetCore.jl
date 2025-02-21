@@ -27,6 +27,6 @@ export build_model, step!, save!, load
 # normaliser.jl
 export inverse_data
 # utils.jl
-export triangles_to_edges, parse_edges, one_hot, minmaxnorm, mse_reduce, inverse_data
+export triangles_to_edges, parse_edges, parse_custom_edges_features, one_hot, minmaxnorm, mse_reduce, inverse_data
 
 end
