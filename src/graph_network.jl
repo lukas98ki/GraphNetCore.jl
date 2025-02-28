@@ -84,7 +84,7 @@ Constructs the Encode-Process-Decode model as a [Lux.jl](https://github.com/LuxD
 - Encode-Process-Decode model as a [Lux.jl](https://github.com/LuxDL/Lux.jl) Chain.
 """
 function build_model(nf_size::Integer, ef_size, output_size::Integer,
-    mps::Integer, layer_size::Integer, hidden_layers::Integer)
+    mps::Integer, layer_size::Integer, hidden_layers::Integer, ml_module)
     encoder = ml_module == Lux ?
               EncoderLux(
         build_mlp(nf_size, layer_size, layer_size, hidden_layers, ml_module),
@@ -170,6 +170,7 @@ end
 - Calculated training loss.
 """
 function step!(gn, graph, target_quantities_change, mask, loss_function)
+
     if typeof(gn.model) <: Lux.Chain
         train_loss, gs = withgradient(
             ps -> loss(ps, gn, graph, target_quantities_change, mask, loss_function), gn.ps)
@@ -217,7 +218,6 @@ function save!(gn::GraphNetwork, opt_state, df_train::DataFrame, df_valid::DataF
         ps_data = getdata(ps)
         ps_axes = getaxes(ps)
     end
-
     save(joinpath(path, "checkpoint_$step.jld2"),
         Dict("ps_data" => ps_data, "ps_axes" => ps_axes, "st" => st,
             "e_norm" => serialize(gn.e_norm), "n_norm" => serialize(gn.n_norm),
@@ -228,6 +228,7 @@ function save!(gn::GraphNetwork, opt_state, df_train::DataFrame, df_valid::DataF
         cps = readlines(joinpath(path, "checkpoints"))
     else
         cps = Vector{String}()
+
     end
     push!(cps, string(step))
     if length(cps) > 5
@@ -242,7 +243,7 @@ function save!(gn::GraphNetwork, opt_state, df_train::DataFrame, df_valid::DataF
 end
 
 """
-    load(quantities, ef_size, norms, output, message_steps, ls, hl, opt, device, path)
+    load(nf_size, ef_size, norms, output, message_steps, ls, hl, opt, device, path, ml_module)
 
 Loads the [`GraphNetwork`](@ref) from the latest checkpoint at the given path.
 
@@ -259,6 +260,7 @@ Loads the [`GraphNetwork`](@ref) from the latest checkpoint at the given path.
 - `opt`: Optimiser that is used for training. Set this to `nothing` if you want to use the optimiser from the checkpoint.
 - `device`: Device where the model should be loaded (see [Lux GPU Management](https://lux.csail.mit.edu/dev/manual/gpu_management#gpu-management)).
 - `path`: Path to the folder where the checkpoint is.
+- `ml_module`: Todo: Julian
 
 ## Returns
 - [`GraphNetwork`](@ref) that is loaded from the checkpoint.
@@ -266,15 +268,17 @@ Loads the [`GraphNetwork`](@ref) from the latest checkpoint at the given path.
 - [DataFrames.jl](https://github.com/JuliaData/DataFrames.jl) DataFrame containing the train losses at the checkpoints.
 - [DataFrames.jl](https://github.com/JuliaData/DataFrames.jl) DataFrame containing the validation losses at the checkpoints (only improvements are saved).
 """
-function load(nf_size, ef_size, e_norms::Union{NormaliserOffline, NormaliserOnline},
+function load_(nf_size, ef_size, e_norms::Union{NormaliserOffline, NormaliserOnline},
         n_norms::Dict{String, Union{NormaliserOffline, NormaliserOnline}},
         o_norms::Dict{String, Union{NormaliserOffline, NormaliserOnline}},
         output, message_steps, ls, hl, opt, device::Function, path::String, ml_module)
+    println("Check")
     if isfile(joinpath(path, "checkpoints"))
         step = parse(Int, readlines(joinpath(path, "checkpoints"))[end])
         ps_data, ps_axes, st, e_norm, n_norm, o_norm, opt_state, df_train, df_valid = load(
             joinpath(path, "checkpoint_$step.jld2"), "ps_data", "ps_axes", "st",
-            "e_norm", "n_norm", "o_norm", "opt_state", "df_train", "df_valid")
+            "e_norm", "n_norm", "o_norm", "opt_state", "df_train", "df_valid")    # Todo: Flux hardcoded?? load instead or something
+        # ml_module = Flux    # Todo: Flux hardcoded? instead to save! and then load in load?
         ps = ComponentArray(ps_data, ps_axes)
         model = build_model(nf_size, ef_size, output, message_steps, ls, hl, ml_module)
 
@@ -293,6 +297,7 @@ function load(nf_size, ef_size, e_norms::Union{NormaliserOffline, NormaliserOnli
             model = model |> device
 
             gn = GraphNetwork(model, nothing, nothing, en, nn, on)
+            gn.ps = Flux.destructure(model)[1]  # Todo: .ps wurde vergessen? -> war nothing -> nicht trainiert
         end
 
         if !isnothing(opt)
@@ -312,6 +317,7 @@ function load(nf_size, ef_size, e_norms::Union{NormaliserOffline, NormaliserOnli
         elseif ml_module == Flux
             model = model |> device
             gn = GraphNetwork(model, nothing, nothing, e_norms, n_norms, o_norms)
+            gn.ps = Flux.destructure(model)[1]
         else
             throw(ArgumentError("Invalid module for network model. Possible modules are: [Flux, Lux]"))
         end
