@@ -84,7 +84,7 @@ Constructs the Encode-Process-Decode model as a [Lux.jl](https://github.com/LuxD
 - Encode-Process-Decode model as a [Lux.jl](https://github.com/LuxDL/Lux.jl) Chain.
 """
 function build_model(nf_size::Integer, ef_size, output_size::Integer,
-    mps::Integer, layer_size::Integer, hidden_layers::Integer, ml_module)
+        mps::Integer, layer_size::Integer, hidden_layers::Integer, ml_module)
     encoder = ml_module == Lux ?
               EncoderLux(
         build_mlp(nf_size, layer_size, layer_size, hidden_layers, ml_module),
@@ -147,9 +147,7 @@ end
 function loss(model::Flux.Chain, graph::FeatureGraph, target::AbstractArray{Float32, 2},
         mask::AbstractArray{T, 1}, loss_function) where {T <: Integer}
     output = model(graph)
-
     error = loss_function(target, output)
-
     loss = mean(error[mask])
 
     return loss
@@ -170,7 +168,6 @@ end
 - Calculated training loss.
 """
 function step!(gn, graph, target_quantities_change, mask, loss_function)
-
     if typeof(gn.model) <: Lux.Chain
         train_loss, gs = withgradient(
             ps -> loss(ps, gn, graph, target_quantities_change, mask, loss_function), gn.ps)
@@ -222,7 +219,6 @@ function save!(gn::GraphNetwork, opt_state, df_train::DataFrame, df_valid::DataF
         cps = readlines(joinpath(path, "checkpoints"))
     else
         cps = Vector{String}()
-
     end
     push!(cps, string(step))
     if length(cps) > 5
@@ -266,7 +262,6 @@ function load_(nf_size, ef_size, e_norms::Union{NormaliserOffline, NormaliserOnl
         n_norms::Dict{String, Union{NormaliserOffline, NormaliserOnline}},
         o_norms::Dict{String, Union{NormaliserOffline, NormaliserOnline}},
         output, message_steps, ls, hl, opt, device::Function, path::String, ml_module)
-    println("Check")
     if isfile(joinpath(path, "checkpoints"))
         step = parse(Int, readlines(joinpath(path, "checkpoints"))[end])
         ps_data, ps_axes, st, e_norm, n_norm, o_norm, opt_state, df_train, df_valid = load(
