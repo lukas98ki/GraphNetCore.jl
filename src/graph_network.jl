@@ -31,7 +31,7 @@ mutable struct GraphNetwork
     model::Union{Lux.Chain, Flux.Chain}
     ps::Union{ComponentArray, AbstractArray{Float32, 1}, Nothing}
     st::Union{NamedTuple, Nothing}
-    e_norm::Union{NormaliserOffline, NormaliserOnline}
+    e_norm::Dict{String, Union{NormaliserOffline, NormaliserOnline}}
     n_norm::Dict{String, Union{NormaliserOffline, NormaliserOnline}}
     o_norm::Dict{String, Union{NormaliserOffline, NormaliserOnline}}
 end
@@ -134,6 +134,8 @@ Calculates the loss of the network based on the given loss function.
 """
 function loss(ps, gn::GraphNetwork, graph::FeatureGraph, target::AbstractArray{Float32, 2},
         mask::AbstractArray{T, 1}, loss_function) where {T <: Integer}
+    println("type of gn.st: ", typeof(gn.st))
+    sleep(10)
     output, st = gn.model(graph, ps, gn.st)
     gn.st = st
 
@@ -258,7 +260,8 @@ Loads the [`GraphNetwork`](@ref) from the latest checkpoint at the given path.
 - [DataFrames.jl](https://github.com/JuliaData/DataFrames.jl) DataFrame containing the train losses at the checkpoints.
 - [DataFrames.jl](https://github.com/JuliaData/DataFrames.jl) DataFrame containing the validation losses at the checkpoints (only improvements are saved).
 """
-function load_(nf_size, ef_size, e_norms::Union{NormaliserOffline, NormaliserOnline},
+function load_(
+        nf_size, ef_size, e_norms::Dict{String, Union{NormaliserOffline, NormaliserOnline}},
         n_norms::Dict{String, Union{NormaliserOffline, NormaliserOnline}},
         o_norms::Dict{String, Union{NormaliserOffline, NormaliserOnline}},
         output, message_steps, ls, hl, opt, device::Function, path::String, ml_module)

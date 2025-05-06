@@ -43,8 +43,6 @@ function parse_edges(edges)
     return vcat(senders, receivers), vcat(receivers, senders)
 end
 
-
-
 """
 parse_custom_edges_features(data)
 
@@ -59,8 +57,18 @@ Also adjusts the edge_feature matrix to the newly formatted and sorted edges.
 - Tuple containing the bi-directional sender-receiver pairs. The first is one direction, the second the other one.
 """
 function parse_custom_edges_features(data)
-    edge_feature_name =  first(filter(k -> startswith(k, "edge|"), keys(data))) # Todo: geht davon aus dass es nur eins gibt
-    edge_features = data[edge_feature_name]
+    println("Should be redundant and not appearing anymore")
+    edge_feature_name_static = (filter(k -> startswith(k, "edge|"), keys(data)))
+    edge_feature_name_dynamic = (filter(k -> startswith(k, "edge["), keys(data)))
+    dims = 0
+    for ef in edge_feature_name_static
+        dims += data.meta["features"][ef]["dim"]
+    end
+    for ef in edge_feature_name_dynamic
+        dims += data.meta["features"][ef]["dim"]
+    end
+
+    # edge_features = data[edge_feature_name]
     edges = data["edges"]
 
     receivers = minimum(edges; dims = 1)    # edges = 2xn
@@ -70,23 +78,27 @@ function parse_custom_edges_features(data)
     senders = unique_edges[1, :]
     receivers = unique_edges[2, :]
 
-    edge_map = Dict(
-        (edges[1,i], edges[2,i]) => i for i in 1:size(edges, 2)
-    )
+    edge_map = Dict()
+    for i in 1:size(edges, 2)
+        a, b = edges[:, i]
+        edge_map[(a, b)] = i
+        edge_map[(b, a)] = i  # beide Richtungen
+    end
 
-    new_edge_features = zeros(size(edge_features, 1), 2 * size(senders, 1))
-
-    for (i, (s,r)) in enumerate(zip(senders, receivers))
-        fwd_idx = edge_map[(s,r)]
-        new_edge_features[:,i] = edge_features[:, fwd_idx]
-        new_edge_features[:, size(senders, 1) + i] = edge_features[:, fwd_idx]
+    new_edge_features = zeros(size(dims, 1), 2 * size(senders, 1))
+    # Todo: Scheint so, dass die Rückrichtung gleich ist. Was ja aber beim Haus nicht der Fall wäre? m1_flow von a nach b ist nicht gleich m1_flow von b nach a (sondern invertiert)
+    # --> also ef invertieren? aber dann würden openingArea und mesh_pos weniger sinn machen; also nen typ check erstellen für genau den fall?
+    for ef in edge_feature_name_static
+        for (i, (s, r)) in enumerate(zip(senders, receivers))
+            fwd_idx = edge_map[(s, r)]
+            new_edge_features[:, i] = ef[:, fwd_idx]
+            new_edge_features[:, size(senders, 1) + i] = ef[:, fwd_idx]
+        end
     end
 
     data[edge_feature_name] = new_edge_features
-    # println("Size checks:")
-    # println("Size senders: ", size(senders))
-    # println("Size new edge features: ", size(new_edge_features))
-    # println("Max min of values are: ", maximum(new_edge_features), minimum(new_edge_features))
+    println("Size von new_edge_features: ", size(new_edge_features))
+    sleep(5)
 
     return vcat(senders, receivers), vcat(receivers, senders)
 end
