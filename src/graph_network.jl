@@ -36,6 +36,18 @@ mutable struct GraphNetwork
     o_norm::Dict{String, Union{NormaliserOffline, NormaliserOnline}}
 end
 
+## Lux Decoder
+# struct NodeEdgeDecoderLux
+#     node_decoder::Lux.Chain
+#     edge_decoder::Lux.Chain
+# end
+
+# function (dec::NodeEdgeDecoderLux)(node_feat, edge_feat)
+#     node_out = dec.node_decoder(node_feat)
+#     edge_out = dec.edge_decoder(edge_feat)
+#     return node_out, edge_out
+# end
+
 """
     build_mlp(input_size, latent_size, output_size, hidden_layers; layer_norm = true)
 
@@ -87,23 +99,44 @@ function build_model(nf_size::Integer, ef_size, output_size::Integer,
         mps::Integer, layer_size::Integer, hidden_layers::Integer, ml_module)
     encoder = ml_module == Lux ?
               EncoderLux(
-        build_mlp(nf_size, layer_size, layer_size, hidden_layers, ml_module),
-        build_mlp(ef_size, layer_size, layer_size, hidden_layers, ml_module)) :
+        build_mlp(
+            nf_size, layer_size, layer_size, hidden_layers, ml_module; layer_norm = true),
+        build_mlp(
+            ef_size, layer_size, layer_size, hidden_layers, ml_module; layer_norm = true)) :
               EncoderFlux(
-        build_mlp(nf_size, layer_size, layer_size, hidden_layers, ml_module),
-        build_mlp(ef_size, layer_size, layer_size, hidden_layers, ml_module))
+        build_mlp(
+            nf_size, layer_size, layer_size, hidden_layers, ml_module; layer_norm = true),
+        build_mlp(
+            ef_size, layer_size, layer_size, hidden_layers, ml_module; layer_norm = true))
 
     processors = ml_module == Lux ? Vector{ProcessorLux}() : Vector{ProcessorFlux}()
     for _ in 1:mps
         push!(processors,
             ml_module == Lux ?
             ProcessorLux(
-                build_mlp(2 * layer_size, layer_size, layer_size, hidden_layers, ml_module),
-                build_mlp(3 * layer_size, layer_size, layer_size, hidden_layers, ml_module)) :
+                build_mlp(2 * layer_size, layer_size, layer_size,
+                    hidden_layers, ml_module; layer_norm = true),
+                build_mlp(3 * layer_size, layer_size, layer_size,
+                    hidden_layers, ml_module; layer_norm = true)) :
             ProcessorFlux(
-                build_mlp(2 * layer_size, layer_size, layer_size, hidden_layers, ml_module),
-                build_mlp(3 * layer_size, layer_size, layer_size, hidden_layers, ml_module)))
+                build_mlp(2 * layer_size, layer_size, layer_size,
+                    hidden_layers, ml_module; layer_norm = true),
+                build_mlp(3 * layer_size, layer_size, layer_size,
+                    hidden_layers, ml_module; layer_norm = true)))
     end
+
+    node_output_size = output_size  # Todo: Lukas
+    edge_output_size = 1
+    # Todo: Temporary hard coded -> adapt to the output_size ?!
+
+    node_decoder = build_mlp(layer_size, layer_size, node_output_size,
+        hidden_layers, ml_module; layer_norm = false)
+
+    edge_decoder = build_mlp(layer_size, layer_size, edge_output_size,
+        hidden_layers, ml_module; layer_norm = false)
+
+    # decoder = ml_module == Lux ? NodeEdgeDecoderLux(node_decoder, edge_decoder) :
+    #           NodeEdgeDecoderFlux(node_decoder, edge_decoder)
 
     decoder = ml_module == Lux ?
               DecoderLux(build_mlp(
@@ -132,27 +165,44 @@ Calculates the loss of the network based on the given loss function.
 ## Returns
 - Calculated Loss.
 """
-function loss(ps, gn::GraphNetwork, graph::FeatureGraph, target::AbstractArray{Float32, 2},
+function loss(ps, gn::GraphNetwork, graph::FeatureGraph, target,
         mask::AbstractArray{T, 1}, loss_function) where {T <: Integer}
-    println("type of gn.st: ", typeof(gn.st))
-    sleep(10)
+    t_node, t_edge = target
+
     output, st = gn.model(graph, ps, gn.st)
     gn.st = st
 
-    error = loss_function(target, output)
+    error = loss_function(t_node, output)
 
     loss = mean(error[mask])
 
     return loss
 end
 
-function loss(model::Flux.Chain, graph::FeatureGraph, target::AbstractArray{Float32, 2},
+function loss(model::Flux.Chain, graph::FeatureGraph, target,
         mask::AbstractArray{T, 1}, loss_function) where {T <: Integer}
-    output = model(graph)
-    error = loss_function(target, output)
-    loss = mean(error[mask])
+    t_node, t_edge = target
+    output_edges = 0
+    output_node, output_edge = model(graph)
+    output_node = model(graph)
+    if !isempty(t_edge)
+        println("t_edge not empty")
+    end
 
-    return loss
+    if isempty(t_edge) && !isnothing(t_node)
+        error_node = loss_function(t_node, output_node)
+        loss = mean(error_node[mask])
+        return loss
+    elseif isnothing(t_node) && !isnothing(t_edge)
+        error_edge = loss_function(t_edge, output_edges)
+        loss = mean(error_edge)
+        return loss
+    else
+        error_node = loss_function(t_node, output_node)
+        error_edge = loss_function(t_edge, output_edges)
+        loss = mean(error_node[mask]) + mean(error_edge)
+        return loss
+    end
 end
 
 """
@@ -206,10 +256,14 @@ function save!(gn::GraphNetwork, opt_state, df_train::DataFrame, df_valid::DataF
         st = cpu_device()(gn.st)
     elseif typeof(gn.model) <: Flux.Chain
         model = adapt(Lux.FromFluxAdaptor(; preserve_ps_st = true), gn.model)
-        ps, st = Lux.setup(Random.default_rng(), model)
+        ps, st = Lux.setup(Random.default_rng(), model) # Todo: Random???
         ps = ComponentArray(cpu_device()(ps))
         ps_data = getdata(ps)
         ps_axes = getaxes(ps)
+
+        # ps_data = cpu_device()(getdata(gn.ps))
+        # ps_axes = getaxes(gn.ps)
+        # st = nothing
     end
     save(joinpath(path, "checkpoint_$step.jld2"),
         Dict("ps_data" => ps_data, "ps_axes" => ps_axes, "st" => st,
@@ -265,15 +319,15 @@ function load_(
         n_norms::Dict{String, Union{NormaliserOffline, NormaliserOnline}},
         o_norms::Dict{String, Union{NormaliserOffline, NormaliserOnline}},
         output, message_steps, ls, hl, opt, device::Function, path::String, ml_module)
+    output = 1
+
     if isfile(joinpath(path, "checkpoints"))
         step = parse(Int, readlines(joinpath(path, "checkpoints"))[end])
         ps_data, ps_axes, st, e_norm, n_norm, o_norm, opt_state, df_train, df_valid = load(
             joinpath(path, "checkpoint_$step.jld2"), "ps_data", "ps_axes", "st",
             "e_norm", "n_norm", "o_norm", "opt_state", "df_train", "df_valid")    # Todo: Flux hardcoded?? load instead or something
-        # ml_module = Flux    # Todo: Flux hardcoded? instead to save! and then load in load?
         ps = ComponentArray(ps_data, ps_axes)
         model = build_model(nf_size, ef_size, output, message_steps, ls, hl, ml_module)
-
         en = deserialize(e_norm, device)
         nn = deserialize(n_norm, device)
         on = deserialize(o_norm, device)

@@ -35,8 +35,23 @@ struct DecoderLux{D} <: Lux.AbstractLuxContainerLayer{(:decode_layer,)}
     decode_layer::D
 end
 
+# function (d::DecoderLux)(graph::FeatureGraph, ps, st)
+#     println("in decode")
+#     println(typeof(ps))
+#     println(keys(ps))
+#     println(typeof(st))
+#     println(keys(st))
+#     println(typeof(d.decode_layer))
+#     println(hasproperty(d.decode_layer, :layers) ? keys(d.decode_layer.layers) : nothing)
+#     sleep(3)
+#     df, std = d.decode_layer(graph.nf, ps, st)
+#     return df, std
+# end
+
 function (d::DecoderLux)(graph::FeatureGraph, ps, st)
-    df, std = d.decode_layer(graph.nf, ps, st)
+    ps_ = haskey(ps, :decode_layer) ? ps.decode_layer : ps
+    st_ = haskey(st, :decode_layer) ? st.decode_layer : st
+    df, std = d.decode_layer(graph.nf, ps_, st_)
     return df, std
 end
 
@@ -98,7 +113,25 @@ function Lux.convert_flux_model(l::Flux.LayerNorm; kwargs...)
     return Lux.LayerNorm(l.size; dims = 1)
 end
 
+struct NodeEdgeDecoderFlux{N <: Flux.Chain, E <: Flux.Chain}
+    node_decoder::N
+    edge_decoder::E
+end
+
+function (dec::NodeEdgeDecoderFlux)(node_feat, edge_feat)
+    node_out = dec.node_decoder(node_feat)
+    edge_out = dec.edge_decoder(edge_feat)
+    return node_out, edge_out
+end
+
+function (dec::NodeEdgeDecoderFlux)(graph::FeatureGraph)
+    return dec(graph.nf, graph.ef)
+end
+
 function luxparams_to_fluxstate(ps)
+    if ps isa Number || ps isa AbstractArray
+        return ps
+    end
     nt = []
     for key in keys(ps)
         if hasproperty(ps[key], :weight)
@@ -114,6 +147,11 @@ function luxparams_to_fluxstate(ps)
             push!(nt,
                 (node_layer = luxparams_to_fluxstate(ps[key].node_layer),
                     edge_layer = luxparams_to_fluxstate(ps[key].edge_layer)))
+        elseif hasproperty(ps[key], :node_decoder) && hasproperty(ps[key], :edge_decoder)
+            push!(nt,
+                (node_decoder = luxparams_to_fluxstate(ps[key].node_decoder),
+                    edge_decoder = luxparams_to_fluxstate(ps[key].edge_decoder)))
+
         elseif hasproperty(ps[key], :decode_layer)
             push!(nt, (decode_layer = luxparams_to_fluxstate(ps[key].decode_layer),))
         else
@@ -122,3 +160,33 @@ function luxparams_to_fluxstate(ps)
     end
     return (layers = Tuple(nt),)
 end
+
+# function luxparams_to_fluxstate(ps)
+#     nt = []
+#     for key in keys(ps)
+#         if hasproperty(ps[key], :weight)
+#             push!(nt, (weight = ps[key].weight, bias = ps[key].bias, σ = ()))
+#         elseif hasproperty(ps[key], :scale)
+#             push!(nt,
+#                 (λ = (),
+#                     diag = (scale = ps[key].scale[:, 1], bias = ps[key].bias[:, 1], σ = ()),
+#                     ϵ = 1.0f-5,
+#                     size = (size(ps[key].scale, 1),),
+#                     affine = true))
+#             # für doppelte Decoder (node_decoder, edge_decoder)
+#         elseif hasproperty(ps[key], :node_decoder) && hasproperty(ps[key], :edge_decoder)
+#             push!(nt,
+#                 (node_decoder = luxparams_to_fluxstate(ps[key].node_decoder),
+#                     edge_decoder = luxparams_to_fluxstate(ps[key].edge_decoder)))
+#         elseif hasproperty(ps[key], :decode_layer)
+#             push!(nt, (decode_layer = luxparams_to_fluxstate(ps[key].decode_layer),))
+#         elseif hasproperty(ps[key], :node_layer)
+#             push!(nt,
+#                 (node_layer = luxparams_to_fluxstate(ps[key].node_layer),
+#                     edge_layer = luxparams_to_fluxstate(ps[key].edge_layer)))
+#         else
+#             push!(nt, luxparams_to_fluxstate(ps[key]))
+#         end
+#     end
+#     return (layers = Tuple(nt),)
+# end
