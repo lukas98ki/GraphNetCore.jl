@@ -14,6 +14,8 @@ import Zygote: withgradient
 include("feature_graph.jl")
 include("graph_net_blocks.jl")
 
+global_debugging_stepper = 0
+
 """
     GraphNetwork(model, ps, st, e_norm, n_norm, o_norm)
 
@@ -95,8 +97,9 @@ Constructs the Encode-Process-Decode model as a [Lux.jl](https://github.com/LuxD
 ## Returns
 - Encode-Process-Decode model as a [Lux.jl](https://github.com/LuxDL/Lux.jl) Chain.
 """
-function build_model(nf_size::Integer, ef_size, output_size::Integer,
+function build_model(nf_size::Integer, ef_size, output_size::Tuple,
         mps::Integer, layer_size::Integer, hidden_layers::Integer, ml_module)
+    output_node_dims, output_edge_dims = output_size
     encoder = ml_module == Lux ?
               EncoderLux(
         build_mlp(
@@ -125,24 +128,26 @@ function build_model(nf_size::Integer, ef_size, output_size::Integer,
                     hidden_layers, ml_module; layer_norm = true)))
     end
 
-    node_output_size = output_size  # Todo: Lukas
-    edge_output_size = 1
-    # Todo: Temporary hard coded -> adapt to the output_size ?!
-
-    node_decoder = build_mlp(layer_size, layer_size, node_output_size,
+    node_decoder = build_mlp(layer_size, layer_size, output_node_dims,
         hidden_layers, ml_module; layer_norm = false)
 
-    edge_decoder = build_mlp(layer_size, layer_size, edge_output_size,
+    edge_decoder = build_mlp(layer_size, layer_size, output_edge_dims,
         hidden_layers, ml_module; layer_norm = false)
 
     # decoder = ml_module == Lux ? NodeEdgeDecoderLux(node_decoder, edge_decoder) :
     #           NodeEdgeDecoderFlux(node_decoder, edge_decoder)
 
+    # For lux decoder only nodes
+    # decoder = ml_module == Lux ?
+    #           DecoderLux(build_mlp(
+    #     layer_size, layer_size, output_size[1], hidden_layers, ml_module; layer_norm = false)) :
+    #           DecoderFlux(build_mlp(
+    #     layer_size, layer_size, output_size[1], hidden_layers, ml_module; layer_norm = false))
+
+    #### decoder for node and edge
     decoder = ml_module == Lux ?
-              DecoderLux(build_mlp(
-        layer_size, layer_size, output_size, hidden_layers, ml_module; layer_norm = false)) :
-              DecoderFlux(build_mlp(
-        layer_size, layer_size, output_size, hidden_layers, ml_module; layer_norm = false))
+              NodeEdgeDecoderLux(node_decoder, edge_decoder) :
+              NodeEdgeDecoderFlux(node_decoder, edge_decoder)
 
     model = ml_module.Chain(encoder, processors..., decoder)
 
@@ -165,14 +170,42 @@ Calculates the loss of the network based on the given loss function.
 ## Returns
 - Calculated Loss.
 """
-function loss(ps, gn::GraphNetwork, graph::FeatureGraph, target,
+function loss(ps, gn::GraphNetwork, graph::FeatureGraph, target::Tuple,
         mask::AbstractArray{T, 1}, loss_function) where {T <: Integer}
     t_node, t_edge = target
 
     output, st = gn.model(graph, ps, gn.st)
     gn.st = st
+    output_node, output_edge = output
+    # println("output_node first five: ", output_node[1:5])
+    # println("output_edge first five: ", output_edge[1:5])
+    # println("target_node first five: ", t_node[1:5])
+    # println("target_edge first five: ", t_edge[1:5])
 
-    error = loss_function(t_node, output)
+    if isempty(t_edge) && !isempty(t_node)
+        error_node = loss_function(t_node, output_node)
+        loss = mean(error_node[mask])
+        return loss
+    elseif isempty(t_node) && !isempty(t_edge)
+        error_edge = loss_function(t_edge, output_edge)
+        loss = mean(error_edge)
+        return loss
+    else
+        error_node = loss_function(t_node, output_node)
+        error_edge = loss_function(t_edge, output_edge)
+        loss_node = mean(error_node[mask])
+        loss_edge = mean(error_edge)
+        loss = (loss_node + loss_edge) / 2
+        return loss
+    end
+end
+
+function loss(ps, gn::GraphNetwork, graph::FeatureGraph, target::AbstractArray{Float32, 2},
+        mask::AbstractArray{T, 1}, loss_function) where {T <: Integer}
+    output, st = gn.model(graph, ps, gn.st)
+    gn.st = st
+
+    error = loss_function(target, output)
 
     loss = mean(error[mask])
 
@@ -182,24 +215,20 @@ end
 function loss(model::Flux.Chain, graph::FeatureGraph, target,
         mask::AbstractArray{T, 1}, loss_function) where {T <: Integer}
     t_node, t_edge = target
-    output_edges = 0
     output_node, output_edge = model(graph)
     output_node = model(graph)
-    if !isempty(t_edge)
-        println("t_edge not empty")
-    end
 
-    if isempty(t_edge) && !isnothing(t_node)
+    if isempty(t_edge) && !isempty(t_node)
         error_node = loss_function(t_node, output_node)
         loss = mean(error_node[mask])
         return loss
-    elseif isnothing(t_node) && !isnothing(t_edge)
-        error_edge = loss_function(t_edge, output_edges)
+    elseif isempty(t_node) && !isempty(t_edge)
+        error_edge = loss_function(t_edge, output_edge)
         loss = mean(error_edge)
         return loss
     else
         error_node = loss_function(t_node, output_node)
-        error_edge = loss_function(t_edge, output_edges)
+        error_edge = loss_function(t_edge, output_edge)
         loss = mean(error_node[mask]) + mean(error_edge)
         return loss
     end
@@ -256,7 +285,7 @@ function save!(gn::GraphNetwork, opt_state, df_train::DataFrame, df_valid::DataF
         st = cpu_device()(gn.st)
     elseif typeof(gn.model) <: Flux.Chain
         model = adapt(Lux.FromFluxAdaptor(; preserve_ps_st = true), gn.model)
-        ps, st = Lux.setup(Random.default_rng(), model) # Todo: Random???
+        ps, st = Lux.setup(Random.default_rng(), model)
         ps = ComponentArray(cpu_device()(ps))
         ps_data = getdata(ps)
         ps_axes = getaxes(ps)
@@ -319,8 +348,6 @@ function load_(
         n_norms::Dict{String, Union{NormaliserOffline, NormaliserOnline}},
         o_norms::Dict{String, Union{NormaliserOffline, NormaliserOnline}},
         output, message_steps, ls, hl, opt, device::Function, path::String, ml_module)
-    output = 1
-
     if isfile(joinpath(path, "checkpoints"))
         step = parse(Int, readlines(joinpath(path, "checkpoints"))[end])
         ps_data, ps_axes, st, e_norm, n_norm, o_norm, opt_state, df_train, df_valid = load(
