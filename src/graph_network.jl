@@ -227,6 +227,8 @@ function loss(model::Flux.Chain, graph::FeatureGraph, target,
         loss = mean(error_edge)
         return loss
     else
+        println("type t_node: ", typeof(t_node))
+        println("size t_node: ", size(t_node))
         error_node = loss_function(t_node, output_node)
         error_edge = loss_function(t_edge, output_edge)
         loss = mean(error_node[mask]) + mean(error_edge)
