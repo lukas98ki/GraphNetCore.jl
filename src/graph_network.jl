@@ -195,6 +195,8 @@ function loss(ps, gn::GraphNetwork, graph::FeatureGraph, target::Tuple,
         error_edge = loss_function(t_edge, output_edge)
         loss_node = mean(error_node[mask])
         loss_edge = mean(error_edge)
+        # println("size error_node: ", error_node)
+        # println("loss_node: ", loss_node , " loss edge: ", loss_edge)
         loss = (loss_node + loss_edge) / 2
         return loss
     end
